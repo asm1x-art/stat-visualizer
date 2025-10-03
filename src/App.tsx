@@ -59,6 +59,7 @@ const CryptoChartViewer: React.FC = () => {
   );
   const [chunkFiles, setChunkFiles] = useState<Map<string, File>>(new Map());
   const [loading, setLoading] = useState<boolean>(false);
+  const [loadingChunks, setLoadingChunks] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [viewRange, setViewRange] = useState<[number, number]>([0, 10000]);
@@ -179,7 +180,7 @@ const CryptoChartViewer: React.FC = () => {
 
     if (chunksToLoad.length === 0) return;
 
-    setLoading(true);
+    setLoadingChunks(true);
 
     try {
       const chunkPromises = chunksToLoad.map(async (chunkId) => {
@@ -226,7 +227,7 @@ const CryptoChartViewer: React.FC = () => {
     } catch (err) {
       setError("Ошибка загрузки чанков: " + (err as Error).message);
     } finally {
-      setLoading(false);
+      setLoadingChunks(false);
     }
   };
 
@@ -444,170 +445,206 @@ const CryptoChartViewer: React.FC = () => {
 
         {error && <div className="crypto-chart__error">⚠️ {error}</div>}
 
+        {loadingChunks && (
+          <div
+            style={{
+              position: "fixed",
+              bottom: "20px",
+              right: "20px",
+              background: "rgba(102, 126, 234, 0.9)",
+              color: "white",
+              padding: "12px 20px",
+              borderRadius: "8px",
+              fontSize: "14px",
+              fontWeight: "600",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+              zIndex: 1000,
+            }}
+          >
+            ⏳ Загрузка чанков...
+          </div>
+        )}
+
         {metadata && !loading && (
           <>
-            <button
-              onClick={() => setSettingsOpen(!settingsOpen)}
-              className={`crypto-chart__settings-toggle ${
-                settingsOpen
-                  ? "crypto-chart__settings-toggle--open"
-                  : "crypto-chart__settings-toggle--closed"
-              }`}
+            <div
+              style={{ display: "flex", gap: "20px", flexDirection: "column" }}
             >
-              <span>⚙️ Настройки графика</span>
-              <span
-                className={`crypto-chart__settings-toggle-arrow ${
+              {/* Chart - главный элемент сверху */}
+              <div className="crypto-chart__chart-wrapper">
+                <Plot
+                  data={plotData}
+                  layout={{
+                    autosize: true,
+                    height: 700,
+                    title: {
+                      text: `📈 Визуализация данных (1 минута таймфрейм) - Chunked Mode`,
+                      font: { size: 20, color: "#1f2937" },
+                    } as any,
+                    xaxis: {
+                      title: { text: "Индекс (минуты)" } as any,
+                      gridcolor: "#f3f4f6",
+                      showgrid: true,
+                      range: viewRange,
+                    },
+                    yaxis: {
+                      title: { text: "Значение" } as any,
+                      gridcolor: "#f3f4f6",
+                      showgrid: true,
+                    },
+                    yaxis2: {
+                      title: { text: "MA Spread" } as any,
+                      overlaying: "y",
+                      side: "right",
+                      gridcolor: "transparent",
+                    },
+                    hovermode: "closest",
+                    legend: {
+                      orientation: "h",
+                      y: -0.15,
+                      x: 0.5,
+                      xanchor: "center",
+                    },
+                    plot_bgcolor: "#fafafa",
+                    paper_bgcolor: "#ffffff",
+                  }}
+                  config={{
+                    responsive: true,
+                    displayModeBar: true,
+                    displaylogo: false,
+                    scrollZoom: true,
+                    modeBarButtonsToAdd: [
+                      "drawline",
+                      "drawopenpath",
+                      "eraseshape",
+                    ] as any,
+                  }}
+                  onRelayout={handleRelayout}
+                  className="crypto-chart__chart"
+                />
+              </div>
+
+              {/* Stats под графиком */}
+              <div className="crypto-chart__stats">
+                <div className="crypto-chart__stats-title">📊 Статистика:</div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                    gap: "8px",
+                  }}
+                >
+                  <div className="crypto-chart__stats-item">
+                    Всего точек: {metadata.totalPoints.toLocaleString()}
+                  </div>
+                  <div className="crypto-chart__stats-item">
+                    Размер чанка: {metadata.chunkSize.toLocaleString()} точек
+                  </div>
+                  <div className="crypto-chart__stats-item">
+                    Загружено чанков: {loadedChunks.size} /{" "}
+                    {metadata.chunks.length}
+                  </div>
+                  <div className="crypto-chart__stats-item">
+                    Диапазон: {viewRange[0].toLocaleString()} -{" "}
+                    {viewRange[1].toLocaleString()} (
+                    {(viewRange[1] - viewRange[0]).toLocaleString()} точек)
+                  </div>
+                </div>
+              </div>
+
+              {/* Настройки - collapsible */}
+              <button
+                onClick={() => setSettingsOpen(!settingsOpen)}
+                className={`crypto-chart__settings-toggle ${
                   settingsOpen
-                    ? "crypto-chart__settings-toggle-arrow--open"
-                    : "crypto-chart__settings-toggle-arrow--closed"
+                    ? "crypto-chart__settings-toggle--open"
+                    : "crypto-chart__settings-toggle--closed"
                 }`}
               >
-                ▼
-              </span>
-            </button>
+                <span>⚙️ Настройки отображения</span>
+                <span
+                  className={`crypto-chart__settings-toggle-arrow ${
+                    settingsOpen
+                      ? "crypto-chart__settings-toggle-arrow--open"
+                      : "crypto-chart__settings-toggle-arrow--closed"
+                  }`}
+                >
+                  ▼
+                </span>
+              </button>
 
-            {settingsOpen && (
-              <div className="crypto-chart__settings">
-                <div className="crypto-chart__settings-card">
-                  <div className="crypto-chart__settings-card-title">
-                    👁️ Показывать данные:
-                  </div>
-                  {(Object.keys(visibility) as Array<keyof IVisibility>).map(
-                    (key) => (
-                      <label
-                        key={key}
-                        className="crypto-chart__visibility-item"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={visibility[key]}
-                          onChange={() => toggleVisibility(key)}
-                          className="crypto-chart__visibility-checkbox"
-                        />
-                        {key}
-                      </label>
-                    )
-                  )}
-                </div>
-
-                {coins.map((coin) => (
-                  <div key={coin} className="crypto-chart__settings-card">
+              {settingsOpen && (
+                <div className="crypto-chart__settings">
+                  <div className="crypto-chart__settings-card">
                     <div className="crypto-chart__settings-card-title">
-                      🎨 Цвета {coin}:
+                      👁️ Показывать данные:
                     </div>
-                    {(
-                      Object.keys(
-                        (colors[coin] as ICoinColors) || {}
-                      ) as TDataType[]
-                    ).map((dataType) => (
-                      <label
-                        key={dataType}
-                        className="crypto-chart__color-item"
-                      >
-                        <span className="crypto-chart__color-label">
-                          {dataType}:
-                        </span>
-                        <input
-                          type="color"
-                          value={(colors[coin] as ICoinColors)[dataType]}
-                          onChange={(e) =>
-                            updateColor(coin, dataType, e.target.value)
-                          }
-                          className="crypto-chart__color-picker"
-                        />
-                      </label>
-                    ))}
+                    {(Object.keys(visibility) as Array<keyof IVisibility>).map(
+                      (key) => (
+                        <label
+                          key={key}
+                          className="crypto-chart__visibility-item"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={visibility[key]}
+                            onChange={() => toggleVisibility(key)}
+                            className="crypto-chart__visibility-checkbox"
+                          />
+                          {key}
+                        </label>
+                      )
+                    )}
                   </div>
-                ))}
 
-                <div className="crypto-chart__settings-card">
-                  <div className="crypto-chart__settings-card-title">
-                    🎨 Цвет Spread:
+                  {coins.map((coin) => (
+                    <div key={coin} className="crypto-chart__settings-card">
+                      <div className="crypto-chart__settings-card-title">
+                        🎨 Цвета {coin}:
+                      </div>
+                      {(
+                        Object.keys(
+                          (colors[coin] as ICoinColors) || {}
+                        ) as TDataType[]
+                      ).map((dataType) => (
+                        <label
+                          key={dataType}
+                          className="crypto-chart__color-item"
+                        >
+                          <span className="crypto-chart__color-label">
+                            {dataType}:
+                          </span>
+                          <input
+                            type="color"
+                            value={(colors[coin] as ICoinColors)[dataType]}
+                            onChange={(e) =>
+                              updateColor(coin, dataType, e.target.value)
+                            }
+                            className="crypto-chart__color-picker"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+
+                  <div className="crypto-chart__settings-card">
+                    <div className="crypto-chart__settings-card-title">
+                      🎨 Цвет Spread:
+                    </div>
+                    <label className="crypto-chart__color-item">
+                      <span className="crypto-chart__color-label">
+                        avgMaSpread:
+                      </span>
+                      <input
+                        type="color"
+                        value={colors.avgMaSpread}
+                        onChange={(e) => updateSpreadColor(e.target.value)}
+                        className="crypto-chart__color-picker"
+                      />
+                    </label>
                   </div>
-                  <label className="crypto-chart__color-item">
-                    <span className="crypto-chart__color-label">
-                      avgMaSpread:
-                    </span>
-                    <input
-                      type="color"
-                      value={colors.avgMaSpread}
-                      onChange={(e) => updateSpreadColor(e.target.value)}
-                      className="crypto-chart__color-picker"
-                    />
-                  </label>
                 </div>
-              </div>
-            )}
-
-            <div className="crypto-chart__chart-wrapper">
-              <Plot
-                data={plotData}
-                layout={{
-                  autosize: true,
-                  height: 700,
-                  title: {
-                    text: `📈 Визуализация данных (1 минута таймфрейм) - Chunked Mode`,
-                    font: { size: 20, color: "#1f2937" },
-                  } as any,
-                  xaxis: {
-                    title: { text: "Индекс (минуты)" } as any,
-                    gridcolor: "#f3f4f6",
-                    showgrid: true,
-                    range: viewRange,
-                  },
-                  yaxis: {
-                    title: { text: "Значение" } as any,
-                    gridcolor: "#f3f4f6",
-                    showgrid: true,
-                  },
-                  yaxis2: {
-                    title: { text: "MA Spread" } as any,
-                    overlaying: "y",
-                    side: "right",
-                    gridcolor: "transparent",
-                  },
-                  hovermode: "closest",
-                  legend: {
-                    orientation: "h",
-                    y: -0.15,
-                    x: 0.5,
-                    xanchor: "center",
-                  },
-                  plot_bgcolor: "#fafafa",
-                  paper_bgcolor: "#ffffff",
-                }}
-                config={{
-                  responsive: true,
-                  displayModeBar: true,
-                  displaylogo: false,
-                  scrollZoom: true,
-                  modeBarButtonsToAdd: [
-                    "drawline",
-                    "drawopenpath",
-                    "eraseshape",
-                  ] as any,
-                }}
-                onRelayout={handleRelayout}
-                className="crypto-chart__chart"
-              />
-            </div>
-
-            <div className="crypto-chart__stats">
-              <div className="crypto-chart__stats-title">📊 Статистика:</div>
-              <div className="crypto-chart__stats-item">
-                Всего точек: {metadata.totalPoints.toLocaleString()}
-              </div>
-              <div className="crypto-chart__stats-item">
-                Размер чанка: {metadata.chunkSize.toLocaleString()} точек
-              </div>
-              <div className="crypto-chart__stats-item">
-                Загружено чанков: {loadedChunks.size} / {metadata.chunks.length}
-              </div>
-              <div className="crypto-chart__stats-summary">
-                Текущий диапазон: {viewRange[0].toLocaleString()} -{" "}
-                {viewRange[1].toLocaleString()} (
-                {(viewRange[1] - viewRange[0]).toLocaleString()} точек)
-              </div>
+              )}
             </div>
           </>
         )}
