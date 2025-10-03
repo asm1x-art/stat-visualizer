@@ -64,6 +64,17 @@ const CryptoChartViewer: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [viewRange, setViewRange] = useState<[number, number]>([0, 10000]);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [currentDragMode, setCurrentDragMode] = useState<
+    | "pan"
+    | "zoom"
+    | "select"
+    | "lasso"
+    | "drawclosedpath"
+    | "drawopenpath"
+    | "drawline"
+    | "drawrect"
+    | "drawcircle"
+  >("pan");
 
   const [visibility, setVisibility] = useState<IVisibility>({
     movingAverages: true,
@@ -348,6 +359,11 @@ const CryptoChartViewer: React.FC = () => {
     async (event: any) => {
       if (!metadata || chunkFiles.size === 0) return;
 
+      // Сохраняем текущий dragmode если он изменился
+      if (event.dragmode) {
+        setCurrentDragMode(event.dragmode);
+      }
+
       if (
         event["xaxis.range[0]"] !== undefined &&
         event["xaxis.range[1]"] !== undefined
@@ -477,6 +493,7 @@ const CryptoChartViewer: React.FC = () => {
                   layout={{
                     autosize: true,
                     height: 700,
+                    dragmode: currentDragMode,
                     title: {
                       text: `📈 Визуализация данных (1 минута таймфрейм) - Chunked Mode`,
                       font: { size: 20, color: "#1f2937" },
