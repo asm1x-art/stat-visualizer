@@ -255,7 +255,6 @@ const CryptoChartViewer: React.FC = () => {
         if (!chunk) continue;
 
         const chunkStart = chunkId * chunkSize;
-        const chunkEnd = chunkStart + chunkSize;
 
         const localStart = Math.max(0, start - chunkStart);
         const localEnd = Math.min(chunkSize, end - chunkStart);
