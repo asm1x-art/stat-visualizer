@@ -1,7 +1,14 @@
-import React, { useState, useMemo, useCallback, type ChangeEvent } from "react";
-import Plotly from "plotly.js-dist-min";
+import React, {
+  useState,
+  useMemo,
+  useCallback,
+  useEffect,
+  type ChangeEvent,
+} from "react";
+import Plotly from "plotly.js-basic-dist-min";
 import createPlotlyComponent from "react-plotly.js/factory";
-import { type PlotData } from "plotly.js-dist-min";
+import { type PlotData } from "plotly.js-basic-dist-min";
+import { dbManager } from "./utils/IndexedDB";
 import "./App.css";
 
 const Plot = createPlotlyComponent(Plotly);
@@ -57,24 +64,13 @@ const CryptoChartViewer: React.FC = () => {
   const [loadedChunks, setLoadedChunks] = useState<Map<number, IChunkData>>(
     new Map()
   );
-  const [chunkFiles, setChunkFiles] = useState<Map<string, File>>(new Map());
   const [loading, setLoading] = useState<boolean>(false);
-  const [loadingChunks, setLoadingChunks] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [viewRange, setViewRange] = useState<[number, number]>([0, 10000]);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
-  const [currentDragMode, setCurrentDragMode] = useState<
-    | "pan"
-    | "zoom"
-    | "select"
-    | "lasso"
-    | "drawclosedpath"
-    | "drawopenpath"
-    | "drawline"
-    | "drawrect"
-    | "drawcircle"
-  >("pan");
+  const [loadingStatus, setLoadingStatus] = useState<string>("");
+  const [currentDragMode, setCurrentDragMode] = useState<"pan" | "zoom">("pan");
 
   const [visibility, setVisibility] = useState<IVisibility>({
     movingAverages: true,
@@ -97,163 +93,186 @@ const CryptoChartViewer: React.FC = () => {
     avgMaSpread: "#F59E0B",
   });
 
-  const loadMetadata = async (file: File, files: FileList): Promise<void> => {
+  useEffect(() => {
+    dbManager.init().catch((err) => {
+      console.error("IndexedDB init error:", err);
+      setError("Ошибка инициализации базы данных");
+    });
+  }, []);
+
+  const calculateFileHash = async (file: File): Promise<string> => {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+
+  const loadAllData = async (files: FileList): Promise<void> => {
     setLoading(true);
     setProgress(0);
     setError(null);
 
     try {
-      const reader = new FileReader();
+      let metadataFile: File | null = null;
+      const chunkFilesMap = new Map<string, File>();
 
-      reader.onload = async (e: ProgressEvent<FileReader>) => {
-        try {
-          const result = e.target?.result;
-          if (typeof result === "string") {
-            const meta: IMetadata = JSON.parse(result);
-            setMetadata(meta);
-
-            // Индексируем все chunk файлы
-            const fileMap = new Map<string, File>();
-            for (let i = 0; i < files.length; i++) {
-              const f = files[i];
-              fileMap.set(f.name, f);
-            }
-            setChunkFiles(fileMap);
-
-            // Автоматически создаём цвета для монет
-            const defaultColorsList = [
-              "#8B5CF6",
-              "#06B6D4",
-              "#10B981",
-              "#F59E0B",
-              "#EF4444",
-            ];
-            const newColors: IColors = { avgMaSpread: "#F59E0B" };
-
-            meta.coins.forEach((coin, idx) => {
-              const baseColor =
-                defaultColorsList[idx % defaultColorsList.length];
-              newColors[coin] = {
-                movingAverages: baseColor,
-                normalizedPrices: baseColor + "CC",
-                cumulativeMeans: baseColor + "88",
-              };
-            });
-            setColors(newColors);
-
-            // Загружаем первый чанк автоматически
-            await loadChunksForRange(
-              0,
-              Math.min(meta.chunkSize, meta.totalPoints),
-              meta,
-              fileMap
-            );
-            setViewRange([0, Math.min(meta.chunkSize, meta.totalPoints)]);
-          }
-          setProgress(100);
-          setTimeout(() => setLoading(false), 300);
-        } catch (err) {
-          setError("Ошибка парсинга metadata: " + (err as Error).message);
-          setLoading(false);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.name.endsWith(".chunked.visualize.json")) {
+          metadataFile = file;
+        } else if (
+          file.name.includes("chunk_") &&
+          file.name.endsWith(".json")
+        ) {
+          chunkFilesMap.set(file.name, file);
         }
-      };
+      }
 
-      reader.onerror = () => {
-        setError("Ошибка чтения файла");
+      if (!metadataFile) {
+        throw new Error("Не найден .chunked.visualize.json файл");
+      }
+
+      setLoadingStatus("Чтение метаданных...");
+      const metadataText = await metadataFile.text();
+      const meta: IMetadata = JSON.parse(metadataText);
+
+      const metadataHash = await calculateFileHash(metadataFile);
+      const cachedMetadata = await dbManager.getMetadata();
+      const cachedHash = cachedMetadata
+        ? await dbManager.getMetadataHash()
+        : null;
+
+      if (cachedHash === metadataHash && cachedMetadata) {
+        setLoadingStatus("Данные уже загружены! Используем кэш...");
+        setMetadata(cachedMetadata);
+
+        const defaultColorsList = [
+          "#8B5CF6",
+          "#06B6D4",
+          "#10B981",
+          "#F59E0B",
+          "#EF4444",
+        ];
+        const newColors: IColors = { avgMaSpread: "#F59E0B" };
+        cachedMetadata.coins.forEach((coin, idx) => {
+          const baseColor = defaultColorsList[idx % defaultColorsList.length];
+          newColors[coin] = {
+            movingAverages: baseColor,
+            normalizedPrices: baseColor + "CC",
+            cumulativeMeans: baseColor + "88",
+          };
+        });
+        setColors(newColors);
+
+        const firstChunk = await dbManager.getChunk(0);
+        if (firstChunk) {
+          setLoadedChunks(new Map([[0, firstChunk]]));
+        }
+        setViewRange([
+          0,
+          Math.min(cachedMetadata.chunkSize, cachedMetadata.totalPoints),
+        ]);
+        setProgress(100);
         setLoading(false);
-      };
+        return;
+      }
 
-      reader.readAsText(file);
+      setLoadingStatus("Очистка старых данных...");
+      await dbManager.clearAll();
+
+      await dbManager.saveMetadata(meta);
+      await dbManager.saveMetadataHash(metadataHash);
+      setMetadata(meta);
+
+      const defaultColorsList = [
+        "#8B5CF6",
+        "#06B6D4",
+        "#10B981",
+        "#F59E0B",
+        "#EF4444",
+      ];
+      const newColors: IColors = { avgMaSpread: "#F59E0B" };
+      meta.coins.forEach((coin, idx) => {
+        const baseColor = defaultColorsList[idx % defaultColorsList.length];
+        newColors[coin] = {
+          movingAverages: baseColor,
+          normalizedPrices: baseColor + "CC",
+          cumulativeMeans: baseColor + "88",
+        };
+      });
+      setColors(newColors);
+
+      const BATCH_SIZE = 5;
+      const totalChunks = meta.chunks.length;
+
+      for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+        const batchEnd = Math.min(i + BATCH_SIZE, totalChunks);
+        const batch = meta.chunks.slice(i, batchEnd);
+
+        const batchPromises = batch.map(async (chunkInfo) => {
+          const fileName = chunkInfo.file.split("/").pop() || chunkInfo.file;
+
+          let file = chunkFilesMap.get(fileName);
+
+          if (!file) {
+            for (const [name, f] of chunkFilesMap.entries()) {
+              if (name.includes(`chunk_${chunkInfo.id}.json`)) {
+                file = f;
+                break;
+              }
+            }
+          }
+
+          if (!file) {
+            throw new Error(
+              `Chunk file not found for chunk ${chunkInfo.id}. Expected: ${fileName}`
+            );
+          }
+
+          const text = await file.text();
+          const chunkData: IChunkData = JSON.parse(text);
+          await dbManager.saveChunk(chunkInfo.id, chunkData);
+
+          return { chunkId: chunkInfo.id, chunkData };
+        });
+
+        const results = await Promise.all(batchPromises);
+
+        if (i === 0) {
+          setLoadedChunks(
+            new Map(results.map((r) => [r.chunkId, r.chunkData]))
+          );
+          setViewRange([0, Math.min(meta.chunkSize, meta.totalPoints)]);
+        }
+
+        const currentProgress = Math.round((batchEnd / totalChunks) * 100);
+        setProgress(currentProgress);
+        setLoadingStatus(
+          `Кэширование: ${batchEnd}/${totalChunks} чанков (${currentProgress}%)`
+        );
+      }
+
+      setLoadingStatus("Готово!");
+      setTimeout(() => {
+        setLoading(false);
+        setLoadingStatus("");
+      }, 500);
     } catch (err) {
       setError("Ошибка загрузки: " + (err as Error).message);
       setLoading(false);
-    }
-  };
-
-  const loadChunksForRange = async (
-    start: number,
-    end: number,
-    meta: IMetadata,
-    files: Map<string, File>
-  ): Promise<void> => {
-    if (!meta) return;
-
-    const chunkSize = meta.chunkSize;
-    const startChunkId = Math.floor(start / chunkSize);
-    const endChunkId = Math.floor(end / chunkSize);
-
-    const chunksToLoad: number[] = [];
-    for (let i = startChunkId; i <= endChunkId; i++) {
-      if (!loadedChunks.has(i) && i < meta.chunks.length) {
-        chunksToLoad.push(i);
-      }
-    }
-
-    if (chunksToLoad.length === 0) return;
-
-    setLoadingChunks(true);
-
-    try {
-      const chunkPromises = chunksToLoad.map(async (chunkId) => {
-        const chunkInfo = meta.chunks[chunkId];
-        const fileName = chunkInfo.file.split("/").pop() || chunkInfo.file;
-        const file = files.get(fileName);
-
-        if (!file) {
-          throw new Error(`Chunk file not found: ${fileName}`);
-        }
-
-        return new Promise<{ chunkId: number; chunkData: IChunkData }>(
-          (resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-              try {
-                const result = e.target?.result;
-                if (typeof result === "string") {
-                  const chunkData: IChunkData = JSON.parse(result);
-                  resolve({ chunkId, chunkData });
-                }
-              } catch (err) {
-                reject(err);
-              }
-            };
-            reader.onerror = () =>
-              reject(new Error(`Failed to read chunk ${chunkId}`));
-            reader.readAsText(file);
-          }
-        );
-      });
-
-      const results = await Promise.all(chunkPromises);
-
-      setLoadedChunks((prev) => {
-        const newMap = new Map(prev);
-        results.forEach(({ chunkId, chunkData }) => {
-          newMap.set(chunkId, chunkData);
-        });
-        return newMap;
-      });
-
-      setProgress(100);
-    } catch (err) {
-      setError("Ошибка загрузки чанков: " + (err as Error).message);
-    } finally {
-      setLoadingChunks(false);
+      setLoadingStatus("");
     }
   };
 
   const getDataForRange = useCallback(
-    (start: number, end: number): IChunkData | null => {
+    async (start: number, end: number): Promise<IChunkData | null> => {
       if (!metadata) return null;
 
       const chunkSize = metadata.chunkSize;
       const startChunkId = Math.floor(start / chunkSize);
       const endChunkId = Math.floor(end / chunkSize);
 
-      const mergedData: IChunkData = {
-        avgMaSpread: [],
-      };
-
+      const mergedData: IChunkData = { avgMaSpread: [] };
       metadata.coins.forEach((coin) => {
         mergedData[coin] = {
           movingAverages: [],
@@ -263,16 +282,24 @@ const CryptoChartViewer: React.FC = () => {
       });
 
       for (let chunkId = startChunkId; chunkId <= endChunkId; chunkId++) {
-        const chunk = loadedChunks.get(chunkId);
+        let chunk = loadedChunks.get(chunkId);
+
+        if (!chunk) {
+          const dbChunk = await dbManager.getChunk(chunkId);
+          if (dbChunk) {
+            chunk = dbChunk;
+            setLoadedChunks((prev) => new Map(prev).set(chunkId, dbChunk));
+          }
+        }
+
         if (!chunk) continue;
 
         const chunkStart = chunkId * chunkSize;
-
         const localStart = Math.max(0, start - chunkStart);
         const localEnd = Math.min(chunkSize, end - chunkStart);
 
         metadata.coins.forEach((coin) => {
-          const coinData = chunk[coin] as ICurrencyData;
+          const coinData = chunk![coin] as ICurrencyData;
           const targetData = mergedData[coin] as ICurrencyData;
 
           targetData.movingAverages.push(
@@ -297,17 +324,22 @@ const CryptoChartViewer: React.FC = () => {
     [metadata, loadedChunks]
   );
 
-  const plotData = useMemo((): Partial<PlotData>[] => {
-    if (!metadata) return [];
+  const [rangeData, setRangeData] = useState<IChunkData | null>(null);
 
-    const data = getDataForRange(viewRange[0], viewRange[1]);
-    if (!data) return [];
+  useEffect(() => {
+    if (metadata) {
+      getDataForRange(viewRange[0], viewRange[1]).then(setRangeData);
+    }
+  }, [viewRange, metadata, getDataForRange]);
+
+  const plotData = useMemo((): Partial<PlotData>[] => {
+    if (!metadata || !rangeData) return [];
 
     const traces: Partial<PlotData>[] = [];
     const coins = metadata.coins;
 
     coins.forEach((coin) => {
-      const coinData = data[coin] as ICurrencyData;
+      const coinData = rangeData[coin] as ICurrencyData;
 
       (Object.keys(visibility) as Array<keyof IVisibility>).forEach(
         (dataType) => {
@@ -336,8 +368,8 @@ const CryptoChartViewer: React.FC = () => {
       );
     });
 
-    if (visibility.avgMaSpread && data.avgMaSpread) {
-      const spreadData = data.avgMaSpread as number[];
+    if (visibility.avgMaSpread && rangeData.avgMaSpread) {
+      const spreadData = rangeData.avgMaSpread as number[];
       const xValues = spreadData.map((_, i) => viewRange[0] + i);
 
       traces.push({
@@ -353,13 +385,12 @@ const CryptoChartViewer: React.FC = () => {
     }
 
     return traces;
-  }, [metadata, viewRange, visibility, colors, getDataForRange]);
+  }, [metadata, rangeData, viewRange, visibility, colors]);
 
   const handleRelayout = useCallback(
-    async (event: any) => {
-      if (!metadata || chunkFiles.size === 0) return;
+    (event: any) => {
+      if (!metadata) return;
 
-      // Сохраняем текущий dragmode если он изменился
       if (event.dragmode) {
         setCurrentDragMode(event.dragmode);
       }
@@ -373,37 +404,16 @@ const CryptoChartViewer: React.FC = () => {
           metadata.totalPoints,
           Math.ceil(event["xaxis.range[1]"])
         );
-
-        const buffer = metadata.chunkSize;
-        const loadStart = Math.max(0, newStart - buffer);
-        const loadEnd = Math.min(metadata.totalPoints, newEnd + buffer);
-
-        await loadChunksForRange(loadStart, loadEnd, metadata, chunkFiles);
         setViewRange([newStart, newEnd]);
       }
     },
-    [metadata, chunkFiles]
+    [metadata]
   );
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>): void => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-
-    // Ищем metadata файл
-    let metadataFile: File | null = null;
-    for (let i = 0; i < files.length; i++) {
-      if (files[i].name.endsWith(".chunked.visualize.json")) {
-        metadataFile = files[i];
-        break;
-      }
-    }
-
-    if (!metadataFile) {
-      setError("Не найден .chunked.visualize.json файл");
-      return;
-    }
-
-    loadMetadata(metadataFile, files);
+    loadAllData(files);
   };
 
   const toggleVisibility = (key: keyof IVisibility): void => {
@@ -431,12 +441,12 @@ const CryptoChartViewer: React.FC = () => {
     <div className="crypto-chart">
       <div className="crypto-chart__container">
         <h1 className="crypto-chart__title">
-          📊 Crypto Visual Data Analyzer (Chunked)
+          Crypto Visual Data Analyzer (IndexedDB Cache)
         </h1>
 
         <div className="crypto-chart__upload">
           <label className="crypto-chart__upload-label">
-            📁 Загрузить файлы данных
+            Загрузить файлы данных
             <input
               type="file"
               accept=".json"
@@ -446,8 +456,7 @@ const CryptoChartViewer: React.FC = () => {
             />
           </label>
           <div className="crypto-chart__upload-hint">
-            Выберите все файлы: .chunked.visualize.json и все chunk_*.json из
-            папки chunks/
+            Выберите все файлы: .chunked.visualize.json и все chunk_*.json
           </div>
         </div>
 
@@ -455,38 +464,17 @@ const CryptoChartViewer: React.FC = () => {
           <div className="crypto-chart__loader">
             <div className="crypto-chart__loader-spinner" />
             <div className="crypto-chart__loader-progress">{progress}%</div>
-            <div className="crypto-chart__loader-text">Загрузка чанков...</div>
+            <div className="crypto-chart__loader-text">{loadingStatus}</div>
           </div>
         )}
 
-        {error && <div className="crypto-chart__error">⚠️ {error}</div>}
-
-        {loadingChunks && (
-          <div
-            style={{
-              position: "fixed",
-              bottom: "20px",
-              right: "20px",
-              background: "rgba(102, 126, 234, 0.9)",
-              color: "white",
-              padding: "12px 20px",
-              borderRadius: "8px",
-              fontSize: "14px",
-              fontWeight: "600",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-              zIndex: 1000,
-            }}
-          >
-            ⏳ Загрузка чанков...
-          </div>
-        )}
+        {error && <div className="crypto-chart__error">{error}</div>}
 
         {metadata && !loading && (
           <>
             <div
               style={{ display: "flex", gap: "20px", flexDirection: "column" }}
             >
-              {/* Chart - главный элемент сверху */}
               <div className="crypto-chart__chart-wrapper">
                 <Plot
                   data={plotData}
@@ -495,7 +483,7 @@ const CryptoChartViewer: React.FC = () => {
                     height: 700,
                     dragmode: currentDragMode,
                     title: {
-                      text: `📈 Визуализация данных (1 минута таймфрейм) - Chunked Mode`,
+                      text: `Визуализация данных (1 минута таймфрейм)`,
                       font: { size: 20, color: "#1f2937" },
                     } as any,
                     xaxis: {
@@ -530,20 +518,14 @@ const CryptoChartViewer: React.FC = () => {
                     displayModeBar: true,
                     displaylogo: false,
                     scrollZoom: true,
-                    modeBarButtonsToAdd: [
-                      "drawline",
-                      "drawopenpath",
-                      "eraseshape",
-                    ] as any,
                   }}
                   onRelayout={handleRelayout}
                   className="crypto-chart__chart"
                 />
               </div>
 
-              {/* Stats под графиком */}
               <div className="crypto-chart__stats">
-                <div className="crypto-chart__stats-title">📊 Статистика:</div>
+                <div className="crypto-chart__stats-title">Статистика:</div>
                 <div
                   style={{
                     display: "grid",
@@ -558,18 +540,12 @@ const CryptoChartViewer: React.FC = () => {
                     Размер чанка: {metadata.chunkSize.toLocaleString()} точек
                   </div>
                   <div className="crypto-chart__stats-item">
-                    Загружено чанков: {loadedChunks.size} /{" "}
-                    {metadata.chunks.length}
-                  </div>
-                  <div className="crypto-chart__stats-item">
                     Диапазон: {viewRange[0].toLocaleString()} -{" "}
-                    {viewRange[1].toLocaleString()} (
-                    {(viewRange[1] - viewRange[0]).toLocaleString()} точек)
+                    {viewRange[1].toLocaleString()}
                   </div>
                 </div>
               </div>
 
-              {/* Настройки - collapsible */}
               <button
                 onClick={() => setSettingsOpen(!settingsOpen)}
                 className={`crypto-chart__settings-toggle ${
@@ -578,7 +554,7 @@ const CryptoChartViewer: React.FC = () => {
                     : "crypto-chart__settings-toggle--closed"
                 }`}
               >
-                <span>⚙️ Настройки отображения</span>
+                <span>Настройки отображения</span>
                 <span
                   className={`crypto-chart__settings-toggle-arrow ${
                     settingsOpen
@@ -594,7 +570,7 @@ const CryptoChartViewer: React.FC = () => {
                 <div className="crypto-chart__settings">
                   <div className="crypto-chart__settings-card">
                     <div className="crypto-chart__settings-card-title">
-                      👁️ Показывать данные:
+                      Показывать данные:
                     </div>
                     {(Object.keys(visibility) as Array<keyof IVisibility>).map(
                       (key) => (
@@ -617,7 +593,7 @@ const CryptoChartViewer: React.FC = () => {
                   {coins.map((coin) => (
                     <div key={coin} className="crypto-chart__settings-card">
                       <div className="crypto-chart__settings-card-title">
-                        🎨 Цвета {coin}:
+                        Цвета {coin}:
                       </div>
                       {(
                         Object.keys(
@@ -646,7 +622,7 @@ const CryptoChartViewer: React.FC = () => {
 
                   <div className="crypto-chart__settings-card">
                     <div className="crypto-chart__settings-card-title">
-                      🎨 Цвет Spread:
+                      Цвет Spread:
                     </div>
                     <label className="crypto-chart__color-item">
                       <span className="crypto-chart__color-label">

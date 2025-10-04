@@ -599,6 +599,13 @@
   dependencies:
     undici-types "~7.13.0"
 
+"@types/plotly.js-basic-dist-min@^2.12.4":
+  version "2.12.4"
+  resolved "https://registry.yarnpkg.com/@types/plotly.js-basic-dist-min/-/plotly.js-basic-dist-min-2.12.4.tgz#b42fa4dfbb3fee51ce1284b9fb37b1cae82b5b6e"
+  integrity sha512-BtvgBR52ZQ9N346gq8eAom9vwh1HAcGTxIUDrQXRMEP75XrSaOF/bXm8PtrZ9WGNUIxo9NxZ6+juKWamJKkYyQ==
+  dependencies:
+    "@types/plotly.js" "*"
+
 "@types/plotly.js-dist-min@^2.3.4":
   version "2.3.4"
   resolved "https://registry.yarnpkg.com/@types/plotly.js-dist-min/-/plotly.js-dist-min-2.3.4.tgz#dcac506a1e5dc87aa84d0dc910830127f3cd4482"
@@ -1268,6 +1275,11 @@ has-flag@^4.0.0:
   resolved "https://registry.yarnpkg.com/has-flag/-/has-flag-4.0.0.tgz#944771fd9c81c81265c4d6941860da06bb59479b"
   integrity sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==
 
+idb@^8.0.3:
+  version "8.0.3"
+  resolved "https://registry.yarnpkg.com/idb/-/idb-8.0.3.tgz#c91e558f15a8d53f1d7f53a094d226fc3ad71fd9"
+  integrity sha512-LtwtVyVYO5BqRvcsKuB2iUMnHwPVByPCXFXOpuU96IZPPoPN6xjOGxZQ74pgSVVLQWtUOYgyeL4GE98BY5D3wg==
+
 ieee754@^1.2.1:
   version "1.2.1"
   resolved "https://registry.yarnpkg.com/ieee754/-/ieee754-1.2.1.tgz#8eb7a10a63fff25d15a57b001586d177d1b0d352"
@@ -1560,10 +1572,10 @@ pkg-dir@^4.1.0:
   dependencies:
     find-up "^4.0.0"
 
-plotly.js-dist-min@^3.1.1:
+plotly.js-basic-dist-min@^3.1.1:
   version "3.1.1"
-  resolved "https://registry.yarnpkg.com/plotly.js-dist-min/-/plotly.js-dist-min-3.1.1.tgz#fade7a386fd7a0a915f151f046697b4ca408e3a4"
-  integrity sha512-eyuiESylUXW4kaF+v9J2gy9eZ+YT2uSVLILM4w1Afxnuv9u4UX9OnZnHR1OdF9ybq4x7+9chAzWUUbQ6HvBb3g==
+  resolved "https://registry.yarnpkg.com/plotly.js-basic-dist-min/-/plotly.js-basic-dist-min-3.1.1.tgz#02f2992e07e64c4ed24d3de9a3cf3a6c29e167fd"
+  integrity sha512-OtVFzHDPQlyG/b8KG/uA/ozaNlXV7MnX3ZuH+4Ezr+6LfsMTv3s2oEuVH+t3qqqMwJs39i0R8dNU54xDW8LOMw==
 
 postcss@^8.5.6:
   version "8.5.6"
