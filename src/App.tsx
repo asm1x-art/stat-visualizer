@@ -1,17 +1,8 @@
-import React, {
-  useState,
-  useMemo,
-  useCallback,
-  useEffect,
-  type ChangeEvent,
-} from "react";
-import Plotly from "plotly.js-basic-dist-min";
-import createPlotlyComponent from "react-plotly.js/factory";
-import { type PlotData } from "plotly.js-basic-dist-min";
-import { dbManager } from "./utils/IndexedDB";
+import React, { useState, useEffect, useRef, type ChangeEvent } from "react";
+import uPlot from "uplot";
+import "uplot/dist/uPlot.min.css";
+import { dbManager } from "./utils/indexedDB";
 import "./App.css";
-
-const Plot = createPlotlyComponent(Plotly);
 
 interface ICurrencyData {
   movingAverages: number[];
@@ -59,6 +50,34 @@ interface IColors {
 
 type TDataType = keyof Omit<IVisibility, "avgMaSpread">;
 
+// Палитра цветов для автоматического назначения
+const DEFAULT_COLOR_PALETTE = [
+  "#8B5CF6", // Purple
+  "#06B6D4", // Cyan
+  "#10B981", // Green
+  "#F59E0B", // Amber
+  "#EF4444", // Red
+  "#EC4899", // Pink
+  "#8B5CF6", // Violet
+  "#14B8A6", // Teal
+];
+
+// Функция генерации начальных цветов на основе монет
+const generateColorsFromCoins = (coins: string[]): IColors => {
+  const colors: IColors = { avgMaSpread: "#F59E0B" };
+
+  coins.forEach((coin, idx) => {
+    const baseColor = DEFAULT_COLOR_PALETTE[idx % DEFAULT_COLOR_PALETTE.length];
+    colors[coin] = {
+      movingAverages: baseColor,
+      normalizedPrices: baseColor + "CC", // С прозрачностью 80%
+      cumulativeMeans: baseColor + "88", // С прозрачностью 53%
+    };
+  });
+
+  return colors;
+};
+
 const CryptoChartViewer: React.FC = () => {
   const [metadata, setMetadata] = useState<IMetadata | null>(null);
   const [loadedChunks, setLoadedChunks] = useState<Map<number, IChunkData>>(
@@ -67,10 +86,11 @@ const CryptoChartViewer: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
-  const [viewRange, setViewRange] = useState<[number, number]>([0, 10000]);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [loadingStatus, setLoadingStatus] = useState<string>("");
-  const [currentDragMode, setCurrentDragMode] = useState<"pan" | "zoom">("pan");
+  const [cursorMode, _] = useState<"pan" | "zoom">("pan");
+  const chartRef = useRef<HTMLDivElement>(null);
+  const uplotInstance = useRef<uPlot | null>(null);
 
   const [visibility, setVisibility] = useState<IVisibility>({
     movingAverages: true,
@@ -79,17 +99,8 @@ const CryptoChartViewer: React.FC = () => {
     avgMaSpread: true,
   });
 
+  // Инициализируем пустым объектом, заполним при загрузке данных
   const [colors, setColors] = useState<IColors>({
-    DOT: {
-      movingAverages: "#8B5CF6",
-      normalizedPrices: "#A78BFA",
-      cumulativeMeans: "#C4B5FD",
-    },
-    LINK: {
-      movingAverages: "#06B6D4",
-      normalizedPrices: "#67E8F9",
-      cumulativeMeans: "#A5F3FC",
-    },
     avgMaSpread: "#F59E0B",
   });
 
@@ -143,35 +154,26 @@ const CryptoChartViewer: React.FC = () => {
         : null;
 
       if (cachedHash === metadataHash && cachedMetadata) {
-        setLoadingStatus("Данные уже загружены! Используем кэш...");
+        setLoadingStatus("Данные уже загружены! Загружаем из кэша...");
         setMetadata(cachedMetadata);
 
-        const defaultColorsList = [
-          "#8B5CF6",
-          "#06B6D4",
-          "#10B981",
-          "#F59E0B",
-          "#EF4444",
-        ];
-        const newColors: IColors = { avgMaSpread: "#F59E0B" };
-        cachedMetadata.coins.forEach((coin, idx) => {
-          const baseColor = defaultColorsList[idx % defaultColorsList.length];
-          newColors[coin] = {
-            movingAverages: baseColor,
-            normalizedPrices: baseColor + "CC",
-            cumulativeMeans: baseColor + "88",
-          };
-        });
+        // Генерируем цвета на основе монет из кэша
+        const newColors = generateColorsFromCoins(cachedMetadata.coins);
         setColors(newColors);
 
-        const firstChunk = await dbManager.getChunk(0);
-        if (firstChunk) {
-          setLoadedChunks(new Map([[0, firstChunk]]));
+        setLoadingStatus("Загрузка всех чанков в память...");
+        const allChunks = new Map<number, IChunkData>();
+        for (let i = 0; i < cachedMetadata.chunks.length; i++) {
+          const chunk = await dbManager.getChunk(i);
+          if (chunk) {
+            allChunks.set(i, chunk);
+          }
+          if (i % 10 === 0) {
+            setProgress(Math.round((i / cachedMetadata.chunks.length) * 100));
+          }
         }
-        setViewRange([
-          0,
-          Math.min(cachedMetadata.chunkSize, cachedMetadata.totalPoints),
-        ]);
+        setLoadedChunks(allChunks);
+
         setProgress(100);
         setLoading(false);
         return;
@@ -184,22 +186,8 @@ const CryptoChartViewer: React.FC = () => {
       await dbManager.saveMetadataHash(metadataHash);
       setMetadata(meta);
 
-      const defaultColorsList = [
-        "#8B5CF6",
-        "#06B6D4",
-        "#10B981",
-        "#F59E0B",
-        "#EF4444",
-      ];
-      const newColors: IColors = { avgMaSpread: "#F59E0B" };
-      meta.coins.forEach((coin, idx) => {
-        const baseColor = defaultColorsList[idx % defaultColorsList.length];
-        newColors[coin] = {
-          movingAverages: baseColor,
-          normalizedPrices: baseColor + "CC",
-          cumulativeMeans: baseColor + "88",
-        };
-      });
+      // Генерируем цвета на основе монет из новых данных
+      const newColors = generateColorsFromCoins(meta.coins);
       setColors(newColors);
 
       const BATCH_SIZE = 5;
@@ -224,9 +212,7 @@ const CryptoChartViewer: React.FC = () => {
           }
 
           if (!file) {
-            throw new Error(
-              `Chunk file not found for chunk ${chunkInfo.id}. Expected: ${fileName}`
-            );
+            throw new Error(`Chunk file not found for chunk ${chunkInfo.id}`);
           }
 
           const text = await file.text();
@@ -236,21 +222,22 @@ const CryptoChartViewer: React.FC = () => {
           return { chunkId: chunkInfo.id, chunkData };
         });
 
-        const results = await Promise.all(batchPromises);
-
-        if (i === 0) {
-          setLoadedChunks(
-            new Map(results.map((r) => [r.chunkId, r.chunkData]))
-          );
-          setViewRange([0, Math.min(meta.chunkSize, meta.totalPoints)]);
-        }
+        await Promise.all(batchPromises);
 
         const currentProgress = Math.round((batchEnd / totalChunks) * 100);
         setProgress(currentProgress);
-        setLoadingStatus(
-          `Кэширование: ${batchEnd}/${totalChunks} чанков (${currentProgress}%)`
-        );
+        setLoadingStatus(`Кэширование: ${batchEnd}/${totalChunks} чанков`);
       }
+
+      setLoadingStatus("Загрузка всех чанков в память...");
+      const allChunks = new Map<number, IChunkData>();
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = await dbManager.getChunk(i);
+        if (chunk) {
+          allChunks.set(i, chunk);
+        }
+      }
+      setLoadedChunks(allChunks);
 
       setLoadingStatus("Готово!");
       setTimeout(() => {
@@ -264,151 +251,203 @@ const CryptoChartViewer: React.FC = () => {
     }
   };
 
-  const getDataForRange = useCallback(
-    async (start: number, end: number): Promise<IChunkData | null> => {
-      if (!metadata) return null;
-
-      const chunkSize = metadata.chunkSize;
-      const startChunkId = Math.floor(start / chunkSize);
-      const endChunkId = Math.floor(end / chunkSize);
-
-      const mergedData: IChunkData = { avgMaSpread: [] };
-      metadata.coins.forEach((coin) => {
-        mergedData[coin] = {
-          movingAverages: [],
-          normalizedPrices: [],
-          cumulativeMeans: [],
-        };
-      });
-
-      for (let chunkId = startChunkId; chunkId <= endChunkId; chunkId++) {
-        let chunk = loadedChunks.get(chunkId);
-
-        if (!chunk) {
-          const dbChunk = await dbManager.getChunk(chunkId);
-          if (dbChunk) {
-            chunk = dbChunk;
-            setLoadedChunks((prev) => new Map(prev).set(chunkId, dbChunk));
-          }
-        }
-
-        if (!chunk) continue;
-
-        const chunkStart = chunkId * chunkSize;
-        const localStart = Math.max(0, start - chunkStart);
-        const localEnd = Math.min(chunkSize, end - chunkStart);
-
-        metadata.coins.forEach((coin) => {
-          const coinData = chunk![coin] as ICurrencyData;
-          const targetData = mergedData[coin] as ICurrencyData;
-
-          targetData.movingAverages.push(
-            ...coinData.movingAverages.slice(localStart, localEnd)
-          );
-          targetData.normalizedPrices.push(
-            ...coinData.normalizedPrices.slice(localStart, localEnd)
-          );
-          targetData.cumulativeMeans.push(
-            ...coinData.cumulativeMeans.slice(localStart, localEnd)
-          );
-        });
-
-        const spreadData = chunk.avgMaSpread as number[];
-        (mergedData.avgMaSpread as number[]).push(
-          ...spreadData.slice(localStart, localEnd)
-        );
-      }
-
-      return mergedData;
-    },
-    [metadata, loadedChunks]
-  );
-
-  const [rangeData, setRangeData] = useState<IChunkData | null>(null);
-
   useEffect(() => {
-    if (metadata) {
-      getDataForRange(viewRange[0], viewRange[1]).then(setRangeData);
-    }
-  }, [viewRange, metadata, getDataForRange]);
+    if (!metadata || loadedChunks.size === 0 || !chartRef.current) return;
 
-  const plotData = useMemo((): Partial<PlotData>[] => {
-    if (!metadata || !rangeData) return [];
+    const allData: uPlot.AlignedData = [[]];
+    const series: uPlot.Series[] = [{}];
 
-    const traces: Partial<PlotData>[] = [];
-    const coins = metadata.coins;
+    metadata.coins.forEach((coin) => {
+      const coinColors = colors[coin] as ICoinColors;
 
-    coins.forEach((coin) => {
-      const coinData = rangeData[coin] as ICurrencyData;
+      (
+        Object.keys(visibility).filter(
+          (k) => k !== "avgMaSpread"
+        ) as TDataType[]
+      ).forEach((dataType) => {
+        if (!visibility[dataType]) return;
 
-      (Object.keys(visibility) as Array<keyof IVisibility>).forEach(
-        (dataType) => {
-          if (dataType === "avgMaSpread") return;
+        const data: number[] = [];
 
-          if (visibility[dataType] && coinData[dataType as TDataType]) {
-            const arrayData = coinData[dataType as TDataType] as number[];
-            const xValues = arrayData.map((_, i) => viewRange[0] + i);
+        for (let chunkId = 0; chunkId < metadata.chunks.length; chunkId++) {
+          const chunk = loadedChunks.get(chunkId);
+          if (!chunk) continue;
 
-            traces.push({
-              x: xValues,
-              y: arrayData,
-              type: "scatter",
-              mode: "lines",
-              name: `${coin} - ${dataType}`,
-              line: {
-                color:
-                  (colors[coin] as ICoinColors)?.[dataType as TDataType] ||
-                  "#888",
-                width: 2,
-              },
-              hovertemplate: `${coin} ${dataType}<br>Index: %{x}<br>Value: %{y:.8f}<extra></extra>`,
-            });
-          }
+          const coinData = chunk[coin] as ICurrencyData;
+          data.push(...coinData[dataType]);
         }
-      );
+
+        allData.push(data);
+        series.push({
+          label: `${coin} - ${dataType}`,
+          stroke: coinColors[dataType],
+          width: 2,
+        });
+      });
     });
 
-    if (visibility.avgMaSpread && rangeData.avgMaSpread) {
-      const spreadData = rangeData.avgMaSpread as number[];
-      const xValues = spreadData.map((_, i) => viewRange[0] + i);
-
-      traces.push({
-        x: xValues,
-        y: spreadData,
-        type: "scatter",
-        mode: "lines",
-        name: "MA Spread",
-        line: { color: colors.avgMaSpread, width: 2 },
-        yaxis: "y2",
-        hovertemplate: `MA Spread<br>Index: %{x}<br>Value: %{y:.8e}<extra></extra>`,
+    if (visibility.avgMaSpread) {
+      const spreadData: number[] = [];
+      for (let chunkId = 0; chunkId < metadata.chunks.length; chunkId++) {
+        const chunk = loadedChunks.get(chunkId);
+        if (!chunk) continue;
+        spreadData.push(...(chunk.avgMaSpread as number[]));
+      }
+      allData.push(spreadData);
+      series.push({
+        label: "MA Spread",
+        stroke: colors.avgMaSpread as string,
+        width: 2,
       });
     }
 
-    return traces;
-  }, [metadata, rangeData, viewRange, visibility, colors]);
+    allData[0] = Array.from({ length: allData[1]?.length || 0 }, (_, i) => i);
 
-  const handleRelayout = useCallback(
-    (event: any) => {
-      if (!metadata) return;
+    const opts: uPlot.Options = {
+      width: chartRef.current.clientWidth,
+      height: 700,
+      series,
+      scales: {
+        x: {
+          time: false,
+        },
+        y: {
+          auto: true,
+        },
+      },
+      cursor: {
+        drag: {
+          x: false,
+          y: false,
+        },
+      },
+      axes: [
+        {
+          label: "Индекс (минуты)",
+          stroke: "#1f2937",
+          grid: { show: true, stroke: "#f3f4f6" },
+        },
+        {
+          label: "Значение",
+          stroke: "#1f2937",
+          grid: { show: true, stroke: "#f3f4f6" },
+        },
+      ],
+      hooks: {
+        init: [
+          (u) => {
+            const over = u.over;
+            let isDragging = false;
+            let startX: number, startY: number;
+            let xMin: number, xMax: number, yMin: number, yMax: number;
 
-      if (event.dragmode) {
-        setCurrentDragMode(event.dragmode);
+            const onMouseDown = (e: MouseEvent) => {
+              if (e.button !== 0 || cursorMode !== "pan") return;
+
+              isDragging = true;
+              startX = e.clientX;
+              startY = e.clientY;
+
+              xMin = u.scales.x.min!;
+              xMax = u.scales.x.max!;
+              yMin = u.scales.y.min!;
+              yMax = u.scales.y.max!;
+
+              document.addEventListener("mousemove", onMouseMove);
+              document.addEventListener("mouseup", onMouseUp);
+
+              e.preventDefault();
+            };
+
+            const onMouseMove = (e: MouseEvent) => {
+              if (!isDragging) return;
+
+              e.preventDefault();
+
+              const rect = over.getBoundingClientRect();
+
+              const deltaXPx = e.clientX - startX;
+              const deltaYPx = e.clientY - startY;
+
+              const xRange = xMax - xMin;
+              const yRange = yMax - yMin;
+
+              const deltaXData = -(deltaXPx / rect.width) * xRange;
+              const deltaYData = (deltaYPx / rect.height) * yRange;
+
+              u.setScale("x", {
+                min: xMin + deltaXData,
+                max: xMax + deltaXData,
+              });
+
+              u.setScale("y", {
+                min: yMin + deltaYData,
+                max: yMax + deltaYData,
+              });
+            };
+
+            const onMouseUp = () => {
+              isDragging = false;
+              document.removeEventListener("mousemove", onMouseMove);
+              document.removeEventListener("mouseup", onMouseUp);
+            };
+
+            over.addEventListener("mousedown", onMouseDown);
+          },
+        ],
+        ready: [
+          (u) => {
+            const over = u.over;
+            over.addEventListener("wheel", (e: WheelEvent) => {
+              e.preventDefault();
+
+              const { left } = over.getBoundingClientRect();
+              const xVal = u.posToVal(e.clientX - left, "x");
+              const factor = e.deltaY < 0 ? 0.75 : 1.25;
+
+              const xMin = u.scales.x.min!;
+              const xMax = u.scales.x.max!;
+              const xRange = xMax - xMin;
+              const newRange = xRange * factor;
+
+              const leftPct = (xVal - xMin) / xRange;
+              const newMin = xVal - leftPct * newRange;
+              const newMax = newMin + newRange;
+
+              u.batch(() => {
+                u.setScale("x", { min: newMin, max: newMax });
+              });
+            });
+          },
+        ],
+      },
+    };
+
+    if (uplotInstance.current) {
+      uplotInstance.current.destroy();
+    }
+
+    uplotInstance.current = new uPlot(opts, allData, chartRef.current);
+
+    const handleResize = () => {
+      if (uplotInstance.current && chartRef.current) {
+        uplotInstance.current.setSize({
+          width: chartRef.current.clientWidth,
+          height: 700,
+        });
       }
+    };
 
-      if (
-        event["xaxis.range[0]"] !== undefined &&
-        event["xaxis.range[1]"] !== undefined
-      ) {
-        const newStart = Math.max(0, Math.floor(event["xaxis.range[0]"]));
-        const newEnd = Math.min(
-          metadata.totalPoints,
-          Math.ceil(event["xaxis.range[1]"])
-        );
-        setViewRange([newStart, newEnd]);
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (uplotInstance.current) {
+        uplotInstance.current.destroy();
+        uplotInstance.current = null;
       }
-    },
-    [metadata]
-  );
+    };
+  }, [metadata, loadedChunks, visibility, colors, cursorMode]);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>): void => {
     const files = e.target.files;
@@ -440,9 +479,7 @@ const CryptoChartViewer: React.FC = () => {
   return (
     <div className="crypto-chart">
       <div className="crypto-chart__container">
-        <h1 className="crypto-chart__title">
-          Crypto Visual Data Analyzer (IndexedDB Cache)
-        </h1>
+        <h1 className="crypto-chart__title">Arby Stat Coin Visualizer</h1>
 
         <div className="crypto-chart__upload">
           <label className="crypto-chart__upload-label">
@@ -475,54 +512,11 @@ const CryptoChartViewer: React.FC = () => {
             <div
               style={{ display: "flex", gap: "20px", flexDirection: "column" }}
             >
-              <div className="crypto-chart__chart-wrapper">
-                <Plot
-                  data={plotData}
-                  layout={{
-                    autosize: true,
-                    height: 700,
-                    dragmode: currentDragMode,
-                    title: {
-                      text: `Визуализация данных (1 минута таймфрейм)`,
-                      font: { size: 20, color: "#1f2937" },
-                    } as any,
-                    xaxis: {
-                      title: { text: "Индекс (минуты)" } as any,
-                      gridcolor: "#f3f4f6",
-                      showgrid: true,
-                      range: viewRange,
-                    },
-                    yaxis: {
-                      title: { text: "Значение" } as any,
-                      gridcolor: "#f3f4f6",
-                      showgrid: true,
-                    },
-                    yaxis2: {
-                      title: { text: "MA Spread" } as any,
-                      overlaying: "y",
-                      side: "right",
-                      gridcolor: "transparent",
-                    },
-                    hovermode: "closest",
-                    legend: {
-                      orientation: "h",
-                      y: -0.15,
-                      x: 0.5,
-                      xanchor: "center",
-                    },
-                    plot_bgcolor: "#fafafa",
-                    paper_bgcolor: "#ffffff",
-                  }}
-                  config={{
-                    responsive: true,
-                    displayModeBar: true,
-                    displaylogo: false,
-                    scrollZoom: true,
-                  }}
-                  onRelayout={handleRelayout}
-                  className="crypto-chart__chart"
-                />
-              </div>
+              <div
+                ref={chartRef}
+                className="crypto-chart__chart-wrapper"
+                style={{ width: "100%", height: "700px" }}
+              />
 
               <div className="crypto-chart__stats">
                 <div className="crypto-chart__stats-title">Статистика:</div>
@@ -540,8 +534,8 @@ const CryptoChartViewer: React.FC = () => {
                     Размер чанка: {metadata.chunkSize.toLocaleString()} точек
                   </div>
                   <div className="crypto-chart__stats-item">
-                    Диапазон: {viewRange[0].toLocaleString()} -{" "}
-                    {viewRange[1].toLocaleString()}
+                    Загружено: {loadedChunks.size} / {metadata.chunks.length}{" "}
+                    чанков
                   </div>
                 </div>
               </div>
