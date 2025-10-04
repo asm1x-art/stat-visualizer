@@ -254,6 +254,11 @@ const CryptoChartViewer: React.FC = () => {
   useEffect(() => {
     if (!metadata || loadedChunks.size === 0 || !chartRef.current) return;
 
+    const hasAllColors = metadata.coins.every((coin) => colors[coin]);
+    if (!hasAllColors) {
+      return;
+    }
+
     const allData: uPlot.AlignedData = [[]];
     const series: uPlot.Series[] = [{}];
 
@@ -507,7 +512,7 @@ const CryptoChartViewer: React.FC = () => {
 
         {error && <div className="crypto-chart__error">{error}</div>}
 
-        {metadata && !loading && (
+        {metadata && (
           <>
             <div
               style={{ display: "flex", gap: "20px", flexDirection: "column" }}
